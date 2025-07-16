@@ -6,7 +6,7 @@ import torch
 app = Flask(__name__)
 
 # Load local mT5 model and tokenizer for multilingual summarization
-MODEL_NAME = "google/mt5-large"
+MODEL_NAME = "google/mt5-base"
 tokenizer = MT5Tokenizer.from_pretrained(MODEL_NAME)
 model = MT5ForConditionalGeneration.from_pretrained(MODEL_NAME)
 

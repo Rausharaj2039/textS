@@ -1,13 +1,18 @@
 from flask import Flask, request, render_template, jsonify
 import requests
+from transformers import MT5ForConditionalGeneration, MT5Tokenizer
+import torch
 
 app = Flask(__name__)
 
-# HuggingFace API details
-SUMMARIZATION_API_URL = "https://api-inference.huggingface.co/models/csebuetnlp/mT5_multilingual_XLSum"
+# Load local mT5 model and tokenizer for multilingual summarization
+MODEL_NAME = "google/mt5-large"
+tokenizer = MT5Tokenizer.from_pretrained(MODEL_NAME)
+model = MT5ForConditionalGeneration.from_pretrained(MODEL_NAME)
+
+# Translation API details (still uses HuggingFace for translation)
 API_TOKEN = "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"
 
-# Supported languages (code: display name)
 LANGUAGES = {
     "en": "English",
     "hi": "Hindi",
@@ -27,7 +32,6 @@ LANGUAGES = {
 }
 
 def translate_text(text, src_lang, tgt_lang):
-    # Try direct translation model first
     model_name = f"Helsinki-NLP/opus-mt-{src_lang}-{tgt_lang}"
     api_url = f"https://api-inference.huggingface.co/models/{model_name}"
     headers = {"Authorization": f"Bearer {API_TOKEN}"}
@@ -38,10 +42,7 @@ def translate_text(text, src_lang, tgt_lang):
         if isinstance(result, list) and len(result) > 0 and "translation_text" in result[0]:
             return result[0]["translation_text"]
         elif isinstance(result, dict) and "error" in result:
-            # Try multi-hop translation if direct model not available
             if src_lang == "en" and tgt_lang == "gu":
-                # English -> Hindi -> Gujarati
-                # Step 1: English to Hindi
                 mid_model1 = "Helsinki-NLP/opus-mt-en-hi"
                 mid_api1 = f"https://api-inference.huggingface.co/models/{mid_model1}"
                 mid_resp1 = requests.post(mid_api1, headers=headers, json=payload)
@@ -49,7 +50,6 @@ def translate_text(text, src_lang, tgt_lang):
                     mid_result1 = mid_resp1.json()
                     if isinstance(mid_result1, list) and len(mid_result1) > 0 and "translation_text" in mid_result1[0]:
                         hindi_text = mid_result1[0]["translation_text"]
-                        # Step 2: Hindi to Gujarati
                         mid_model2 = "Helsinki-NLP/opus-mt-hi-gu"
                         mid_api2 = f"https://api-inference.huggingface.co/models/{mid_model2}"
                         mid_payload2 = {"inputs": hindi_text}
@@ -73,28 +73,12 @@ def translate_text(text, src_lang, tgt_lang):
         return f"Translation API Error: {response.status_code} - {response.text}"
 
 def summarize_text(text, min_length=30, max_length=150, language="en"):
-    headers = {"Authorization": f"Bearer {API_TOKEN}"}
-    input_text = f"{language}: {text.strip()}"
-    payload = {
-        "inputs": input_text,
-        "parameters": {
-            "min_length": min_length,
-            "max_length": max_length,
-            "do_sample": False,
-            "num_beams": 4
-        }
-    }
-    response = requests.post(SUMMARIZATION_API_URL, headers=headers, json=payload)
-    if response.status_code == 200:
-        result = response.json()
-        if isinstance(result, list) and len(result) > 0 and "summary_text" in result[0]:
-            return result[0]["summary_text"]
-        elif isinstance(result, dict) and "error" in result:
-            return f"Summarization API Error: {result['error']}"
-        else:
-            return str(result)
-    else:
-        return f"Summarization API Error: {response.status_code} - {response.text}"
+    # mT5 model supports multilingual summarization
+    input_text = "summarize: " + text.strip()
+    inputs = tokenizer.encode(input_text, return_tensors="pt", max_length=512, truncation=True)
+    summary_ids = model.generate(inputs, max_length=max_length, min_length=min_length, length_penalty=2.0, num_beams=4, early_stopping=True)
+    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    return summary
 
 def language_flag(code):
     flags = {
@@ -122,7 +106,6 @@ def index():
         selected_language = request.form.get('language', 'en')
         selected_input_language = request.form.get('input_language', 'en')
         if selected_input_language != selected_language:
-            # Translate first
             translated_text = translate_text(text, selected_input_language, selected_language)
             summary = summarize_text(translated_text, min_length=min_length, max_length=max_length, language=selected_language)
         else:
@@ -145,4 +128,8 @@ def api_summarize():
     return jsonify({'summary': summary})
 
 if __name__ == '__main__':
+    # Local development ke liye: python app.py
+    # Browser me: http://127.0.0.1:5000/
+    # Agar aapko port ya host change karna hai (e.g. cloud/Render/Heroku):
+    # app.run(host='0.0.0.0', port=5000, debug=True)
     app.run(debug=True) 
